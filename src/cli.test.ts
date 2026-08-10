@@ -42,21 +42,24 @@ test('syncLinks shares dirs, keeps files private, seeds settings', () => {
   expect(readFileSync(join(claudeDir, 'settings.json'), 'utf8')).toBe('{"model":"opus"}');
 });
 
-test('syncLinks demotes a stale share-link left by an older ruleset', () => {
+test('syncLinks demotes a stale share-link but respects a hand-made one on a seed file', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'claude-as-'));
   const claudeDir = join(tmp, '.claude');
   mkdirSync(join(claudeDir, 'daemon'), { recursive: true });
-  writeFileSync(join(claudeDir, 'settings.json'), '{"model":"opus"}');
+  writeFileSync(join(claudeDir, 'policy-limits.json'), '{}');
+  writeFileSync(join(claudeDir, 'CLAUDE.md'), '# shared');
   const profileDir = join(tmp, 'personal');
   mkdirSync(profileDir, { recursive: true });
-  symlinkSync(join(claudeDir, 'settings.json'), join(profileDir, 'settings.json'));
   symlinkSync(join(claudeDir, 'daemon'), join(profileDir, 'daemon'));
+  symlinkSync(join(claudeDir, 'policy-limits.json'), join(profileDir, 'policy-limits.json'));
+  symlinkSync(join(claudeDir, 'CLAUDE.md'), join(profileDir, 'CLAUDE.md')); // the documented `ln` opt-in
 
   syncLinks(claudeDir, profileDir);
+  syncLinks(claudeDir, profileDir);
 
-  expect(lstatSync(join(profileDir, 'settings.json')).isSymbolicLink()).toBe(false);
-  expect(readFileSync(join(profileDir, 'settings.json'), 'utf8')).toBe('{"model":"opus"}'); // content preserved
   expect(() => lstatSync(join(profileDir, 'daemon'))).toThrow();
+  expect(() => lstatSync(join(profileDir, 'policy-limits.json'))).toThrow();
+  expect(lstatSync(join(profileDir, 'CLAUDE.md')).isSymbolicLink()).toBe(true); // survives, and is not re-seeded over
 });
 
 test('spliceBlock installs, replaces, and removes without eating the rc file', () => {

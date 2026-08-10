@@ -61,7 +61,8 @@ export function syncLinks(claudeDir: string, profileDir: string): void {
       /* absent */
     }
     // Demote a link an older ruleset made shareable; only ever our own link back to src.
-    if (cur?.isSymbolicLink() && !share && readlinkSync(dest) === src) {
+    // Seed files are exempt: a symlink there is the documented way to opt into sharing one.
+    if (cur?.isSymbolicLink() && !share && !SEED_FILES.has(e.name) && readlinkSync(dest) === src) {
       unlinkSync(dest);
       cur = null;
     }

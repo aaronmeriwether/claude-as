@@ -100,6 +100,24 @@ says so:
 }
 ```
 
+### Sharing `CLAUDE.md` anyway
+
+`CLAUDE.md` is per-profile by default, since a work profile and a personal one
+usually want different standing instructions. If you would rather have one set of
+instructions everywhere, replace the seeded copy with a symlink by hand — claude-as
+leaves an existing symlink on a seeded file alone, so this survives every sync:
+
+```bash
+ln -sfn ~/.claude/CLAUDE.md ~/.claude-profiles/work/CLAUDE.md
+```
+
+The caveat is the reason it isn't the default: an editor that saves by writing a
+temp file and renaming it over the target will replace the symlink with a real
+file, quietly ending the sharing. Check with `ls -l` and re-run the same command to
+restore it. Editing through `/memory` in Claude Code, or with an editor that writes
+in place, is unaffected. The same trick works for `settings.json`, with the same
+caveat and rather more to lose.
+
 ## Notes
 
 - Links are re-synced on every launch, so directories Claude Code creates in
