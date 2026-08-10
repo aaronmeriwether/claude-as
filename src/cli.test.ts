@@ -1,13 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Config, renderBlock, resolveProfile, spliceBlock, syncLinks } from './cli.ts';
 
-const cfg: Config = {
-  profiles: { personal: {}, work: {} },
-  projects: { '/w/a': 'personal', '/w/a/b': 'work' },
-};
+const cfg: Config = { projects: { '/w/a': 'personal', '/w/a/b': 'work' } };
 
 test('longest matching prefix wins, on path boundaries', () => {
   expect(resolveProfile(cfg, '/w/a')).toBe('personal');
@@ -18,12 +15,14 @@ test('longest matching prefix wins, on path boundaries', () => {
   expect(resolveProfile(cfg, '/w')).toBe('default');
 });
 
-test('syncLinks shares everything but the identity files', () => {
+test('syncLinks shares dirs, keeps files private, seeds settings', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'claude-as-'));
   const claudeDir = join(tmp, '.claude');
   mkdirSync(join(claudeDir, 'projects'), { recursive: true });
-  writeFileSync(join(claudeDir, 'history.jsonl'), '');
-  writeFileSync(join(claudeDir, '.claude.json'), '{}');
+  mkdirSync(join(claudeDir, 'daemon'), { recursive: true });
+  writeFileSync(join(claudeDir, 'history.jsonl'), 'h');
+  writeFileSync(join(claudeDir, 'settings.json'), '{"model":"opus"}');
+  writeFileSync(join(claudeDir, 'policy-limits.json'), '{}');
   const profileDir = join(tmp, 'personal');
 
   syncLinks(claudeDir, profileDir);
@@ -31,7 +30,33 @@ test('syncLinks shares everything but the identity files', () => {
 
   expect(readlinkSync(join(profileDir, 'projects'))).toBe(join(claudeDir, 'projects'));
   expect(readlinkSync(join(profileDir, 'history.jsonl'))).toBe(join(claudeDir, 'history.jsonl'));
-  expect(() => readlinkSync(join(profileDir, '.claude.json'))).toThrow();
+  // private dir and private file are simply absent — Claude Code makes its own inside the profile
+  expect(() => lstatSync(join(profileDir, 'daemon'))).toThrow();
+  expect(() => lstatSync(join(profileDir, 'policy-limits.json'))).toThrow();
+
+  // settings.json is seeded as a real copy, and edits to it stay in the profile
+  expect(lstatSync(join(profileDir, 'settings.json')).isSymbolicLink()).toBe(false);
+  writeFileSync(join(profileDir, 'settings.json'), '{"model":"haiku"}');
+  syncLinks(claudeDir, profileDir);
+  expect(readFileSync(join(profileDir, 'settings.json'), 'utf8')).toBe('{"model":"haiku"}');
+  expect(readFileSync(join(claudeDir, 'settings.json'), 'utf8')).toBe('{"model":"opus"}');
+});
+
+test('syncLinks demotes a stale share-link left by an older ruleset', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'claude-as-'));
+  const claudeDir = join(tmp, '.claude');
+  mkdirSync(join(claudeDir, 'daemon'), { recursive: true });
+  writeFileSync(join(claudeDir, 'settings.json'), '{"model":"opus"}');
+  const profileDir = join(tmp, 'personal');
+  mkdirSync(profileDir, { recursive: true });
+  symlinkSync(join(claudeDir, 'settings.json'), join(profileDir, 'settings.json'));
+  symlinkSync(join(claudeDir, 'daemon'), join(profileDir, 'daemon'));
+
+  syncLinks(claudeDir, profileDir);
+
+  expect(lstatSync(join(profileDir, 'settings.json')).isSymbolicLink()).toBe(false);
+  expect(readFileSync(join(profileDir, 'settings.json'), 'utf8')).toBe('{"model":"opus"}'); // content preserved
+  expect(() => lstatSync(join(profileDir, 'daemon'))).toThrow();
 });
 
 test('spliceBlock installs, replaces, and removes without eating the rc file', () => {
@@ -47,7 +72,7 @@ test('spliceBlock installs, replaces, and removes without eating the rc file', (
   expect(spliceBlock(replaced, null)).toBe(rc);
 });
 
-test('--exec-env emits the profile config dir and its env', async () => {
+test('--exec-env emits the profile config dir', async () => {
   // realpath: process.cwd() reports /private/var on macOS, so map keys must match
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'claude-as-')));
   const root = join(tmp, 'profiles');
@@ -56,15 +81,9 @@ test('--exec-env emits the profile config dir and its env', async () => {
   const proj = join(tmp, 'proj', 'sub');
   mkdirSync(proj, { recursive: true });
   mkdirSync(root, { recursive: true });
-  writeFileSync(
-    join(root, 'config.yaml'),
-    Bun.YAML.stringify({
-      profiles: { work: { env: { CLAUDE_CODE_USE_BEDROCK: '1', AWS_PROFILE: 'my-profile' } } },
-      projects: { [join(tmp, 'proj')]: 'work' },
-    }),
-  );
+  writeFileSync(join(root, 'config.yaml'), Bun.YAML.stringify({ projects: { [join(tmp, 'proj')]: 'work' } }));
 
-  const env = { ...process.env, CLAUDE_AS_ROOT: root, CLAUDE_AS_CLAUDE_DIR: claudeDir };
+  const env: Record<string, string | undefined> = { ...process.env, CLAUDE_AS_ROOT: root, CLAUDE_AS_CLAUDE_DIR: claudeDir };
   delete env.CLAUDE_CONFIG_DIR; // the test runner may itself be under a profile
   const run = (cwd: string, extra: Record<string, string> = {}) =>
     new Response(
@@ -73,7 +92,6 @@ test('--exec-env emits the profile config dir and its env', async () => {
 
   const out = await run(proj);
   expect(out).toContain(`export CLAUDE_CONFIG_DIR='${join(root, 'work')}'`);
-  expect(out).toContain("export CLAUDE_CODE_USE_BEDROCK='1'");
   expect(out).toContain('CLAUDE_AS_REAL=');
 
   // unmapped dir, and an already-profiled session, both stay on the default config

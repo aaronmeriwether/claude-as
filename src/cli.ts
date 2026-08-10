@@ -1,20 +1,37 @@
 #!/usr/bin/env bun
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
-export type Profile = { env?: Record<string, string> };
-export type Config = { profiles: Record<string, Profile>; projects: Record<string, string> };
+export type Config = { projects: Record<string, string> };
 
 export const DEFAULT_PROFILE = 'default';
 
 /**
- * Entries of ~/.claude that must stay real files inside a profile dir rather
- * than symlinks back to the shared config: anything carrying account identity.
- * (Credentials themselves live in the OS keystore, keyed by config-dir path.)
+ * What a profile shares with ~/.claude. The rule is "directories share, regular
+ * files don't", which lands right almost everywhere: dir contents are keyed by
+ * session id / pid / hash so they merge cleanly, while the top-level files are
+ * account identity, server-pushed policy, or per-config-dir scratch state.
+ *
+ * DETAIL: it also sidesteps a failure mode — a shared *file* is a symlink, and
+ * anything written via write-tmp-then-rename replaces that symlink with a real
+ * file, silently un-sharing it. Only append-only files are safe to share.
  */
-const UNSHARED = new Set(['.claude.json', '.credentials.json']);
+const PRIVATE_DIRS = new Set(['daemon', 'backups']); // per-config-dir IPC state; backups of the private .claude.json
+const SHARED_FILES = new Set(['history.jsonl']); // append-only, carries no identity
+const SEED_FILES = new Set(['settings.json', 'CLAUDE.md']); // private, but copied once so a new profile isn't bare
 
 const BEGIN = '# >>> claude-as >>> (managed by `claude-as install`; do not edit)';
 const END = '# <<< claude-as <<<';
@@ -30,17 +47,27 @@ export function resolveProfile(cfg: Config, dir: string): string {
   return best ? (cfg.projects[best] ?? DEFAULT_PROFILE) : DEFAULT_PROFILE;
 }
 
-/** Symlink every shareable entry of `claudeDir` into `profileDir`. Idempotent; re-run each launch so newly created entries get picked up. */
+/** Link the shareable entries of `claudeDir` into `profileDir` and seed the private ones. Idempotent; re-run each launch so newly created entries get picked up. */
 export function syncLinks(claudeDir: string, profileDir: string): void {
   mkdirSync(profileDir, { recursive: true });
-  for (const name of readdirSync(claudeDir)) {
-    if (UNSHARED.has(name)) continue;
-    const dest = join(profileDir, name);
+  for (const e of readdirSync(claudeDir, { withFileTypes: true })) {
+    const src = join(claudeDir, e.name);
+    const dest = join(profileDir, e.name);
+    const share = e.isDirectory() ? !PRIVATE_DIRS.has(e.name) : SHARED_FILES.has(e.name);
+    let cur = null;
     try {
-      lstatSync(dest);
+      cur = lstatSync(dest);
     } catch {
-      symlinkSync(join(claudeDir, name), dest);
+      /* absent */
     }
+    // Demote a link an older ruleset made shareable; only ever our own link back to src.
+    if (cur?.isSymbolicLink() && !share && readlinkSync(dest) === src) {
+      unlinkSync(dest);
+      cur = null;
+    }
+    if (cur) continue;
+    if (share) symlinkSync(src, dest);
+    else if (SEED_FILES.has(e.name)) copyFileSync(src, dest);
   }
 }
 
@@ -74,7 +101,7 @@ export function shq(s: string): string {
 
 function loadConfig(file: string): Config {
   const cfg = existsSync(file) ? (Bun.YAML.parse(readFileSync(file, 'utf8')) as Partial<Config>) : {};
-  return { profiles: cfg?.profiles ?? {}, projects: cfg?.projects ?? {} };
+  return { projects: cfg?.projects ?? {} };
 }
 
 function saveConfig(file: string, cfg: Config): void {
@@ -117,7 +144,6 @@ function main(argv: string[]): number {
       const dir = join(root, name);
       syncLinks(claudeDir, dir);
       out.push(`export CLAUDE_CONFIG_DIR=${shq(dir)}`);
-      for (const [k, v] of Object.entries(cfg.profiles[name]?.env ?? {})) out.push(`export ${k}=${shq(String(v))}`);
     }
     console.log(out.join('\n'));
     return 0;
@@ -153,7 +179,8 @@ function main(argv: string[]): number {
         'claude-as ls                 list every pinned project',
         'claude-as install|uninstall [--shell zsh|bash]',
         '',
-        `config: ${configFile}   (add per-profile env: vars there, e.g. for Bedrock)`,
+        `pins:   ${configFile}`,
+        `config: ${join(root, '<profile>', 'settings.json')}   (per-profile; seeded from ~/.claude, then yours)`,
       ].join('\n'),
     );
     return 0;
@@ -172,10 +199,7 @@ function main(argv: string[]): number {
   const here = projectRoot();
   if (cmd && !RESERVED.has(cmd)) {
     if (cmd === DEFAULT_PROFILE) delete cfg.projects[here];
-    else {
-      cfg.projects[here] = cmd;
-      cfg.profiles[cmd] ??= {};
-    }
+    else cfg.projects[here] = cmd;
     saveConfig(configFile, cfg);
   }
 

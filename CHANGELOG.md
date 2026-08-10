@@ -26,6 +26,7 @@ Stable versions (e.g. `v1.2.0`) publish to npm `@latest`. Pre-release versions
 
 ### Added
 - Initial release: per-project credential profiles for Claude Code that share one
-  chat history. `claude-as <profile>` pins a directory tree to a profile,
-  `claude-as install` adds the `claude()` shell wrapper, and per-profile `env:`
-  vars in `~/.claude-profiles/config.yaml` cover non-OAuth setups such as Bedrock.
+  chat history. `claude-as <profile>` pins a directory tree to a profile and
+  `claude-as install` adds the `claude()` shell wrapper. Directories under
+  `~/.claude` are shared between profiles, regular files are per-profile, and a
+  new profile's `settings.json`/`CLAUDE.md` are seeded from your default config.

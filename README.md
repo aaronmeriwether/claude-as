@@ -39,11 +39,25 @@ Run `claude-as help` for the full flag list.
 
 A profile is nothing but a `CLAUDE_CONFIG_DIR` (`~/.claude-profiles/<name>`).
 Claude Code keys its OS-keystore credential entry off that path, so profiles
-cannot see each other's auth — but *everything else* in the profile dir is a
-symlink back into the real `~/.claude`, so `projects/` (transcripts),
-`history.jsonl`, `settings.json`, `plugins/`, `hooks/` and the rest are genuinely
-one shared store. The `default` profile is plain `~/.claude` with no
-`CLAUDE_CONFIG_DIR` at all.
+cannot see each other's auth. The profile dir is then populated by one rule:
+
+> **directories are symlinked back into `~/.claude`; regular files are not.**
+
+So `projects/` (transcripts), `plugins/`, `hooks/`, `tasks/`, `file-history/` and
+the rest are genuinely one shared store, while `settings.json`, `CLAUDE.md`,
+`.claude.json` and the server-pushed policy files stay per-profile. The rule
+works because directory contents are keyed by session id, pid or content hash, so
+they merge without collisions — and because a file written via
+write-tmp-then-rename would replace its own symlink with a real file and silently
+un-share itself. `history.jsonl` is the one shared file: append-only, so it is
+safe, and shared shell history is worth having.
+
+`daemon/` and `backups/` are the two directories held back — the first is
+per-config-dir IPC state, the second backs up the private `.claude.json`.
+`settings.json` and `CLAUDE.md` are copied from `~/.claude` the first time a
+profile is created, so a new profile starts from your usual setup and then
+diverges. The `default` profile is plain `~/.claude` with no `CLAUDE_CONFIG_DIR`
+at all.
 
 The installed `claude()` shell function asks the CLI for the environment of the
 current directory and `exec`s the real binary in a subshell, so nothing leaks into
@@ -56,35 +70,41 @@ claude() { local __cs; __cs="$(command claude-as --exec-env)" || return $?
 
 ## Config
 
-`~/.claude-profiles/config.yaml`, rewritten by `claude-as <profile>` and safe to
-hand-edit. A profile's `env` is exported before launch — that is how a non-OAuth
-profile such as Bedrock is expressed:
+There are two pieces, and claude-as only owns the first.
+
+**Which project uses which profile** — `~/.claude-profiles/config.yaml`, rewritten
+by `claude-as <profile>` and safe to hand-edit:
 
 ```yaml
-profiles:
-  personal: {}
-  work:
-    env:
-      CLAUDE_CODE_USE_BEDROCK: "1"
-      AWS_PROFILE: my-bedrock-profile
-      AWS_REGION: us-west-2
 projects:
   /home/me/src/side-project: personal
   /home/me/src/day-job: work
 ```
 
-`projects` keys are matched by **longest path prefix**, so a subdirectory can
-override its parent. Keys come from `git rev-parse --show-toplevel` (falling back
-to `$PWD`) at the time you run `claude-as`.
+Keys are matched by **longest path prefix**, so a subdirectory can override its
+parent. They come from `git rev-parse --show-toplevel` (falling back to `$PWD`) at
+the time you run `claude-as`.
+
+**What a profile does** — its own `~/.claude-profiles/<name>/settings.json`, which
+is ordinary Claude Code settings. claude-as adds no configuration layer of its
+own; a non-OAuth profile such as Bedrock is just a profile whose `settings.json`
+says so:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_PROFILE": "my-bedrock-profile",
+    "AWS_REGION": "us-west-2"
+  }
+}
+```
 
 ## Notes
 
-- Only `.claude.json` and `.credentials.json` are withheld from the symlink sync —
-  they carry account identity. Everything else is shared, including runtime dirs
-  (`daemon/`, `ide/`), which is no worse than two concurrent sessions on one
-  account.
-- Links are re-synced on every launch, so entries Claude Code creates in
-  `~/.claude` later get shared without a re-install.
+- Links are re-synced on every launch, so directories Claude Code creates in
+  `~/.claude` later get shared without a re-install. A directory that an older
+  version had shared but the current rules hold back is unlinked on the next sync.
 - Each profile keeps its own `.claude.json`, so onboarding and folder-trust
   prompts appear once per profile, and MCP servers added via `claude mcp add` are
   per-profile.
