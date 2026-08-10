@@ -1,0 +1,22 @@
+{
+  "name": "claude-as",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Per-project credential profiles for Claude Code that keep one shared chat history.",
+  "repository": "https://github.com/p120ph37/claude-as",
+  "license": "MIT",
+  "bin": {
+    "claude-as": "./src/cli.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^6.0.3"
+  }
+}
