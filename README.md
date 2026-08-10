@@ -118,6 +118,18 @@ restore it. Editing through `/memory` in Claude Code, or with an editor that wri
 in place, is unaffected. The same trick works for `settings.json`, with the same
 caveat and rather more to lose.
 
+### Setting up other `CLAUDE_CONFIG_DIR`-aware tools
+
+`CLAUDE_CONFIG_DIR` is exported only inside the subshell that launches `claude`,
+so Claude Code and everything it spawns see the right profile, but a setup
+command you run by hand does not — it would configure the default profile no
+matter which directory you are in. Borrow the profile's environment for one
+command:
+
+```bash
+(eval "$(claude-as --exec-env)"; some-tool --setup)
+```
+
 ## Notes
 
 - Links are re-synced on every launch, so directories Claude Code creates in
