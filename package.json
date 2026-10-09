@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "description": "Per-project credential profiles for Claude Code that keep one shared chat history.",
-  "repository": "https://github.com/p120ph37/claude-as",
+  "repository": "https://github.com/aaronmeriwether/claude-as",
   "license": "MIT",
   "bin": {
     "claude-as": "./src/cli.ts"
